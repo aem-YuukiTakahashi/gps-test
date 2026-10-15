@@ -34,7 +34,7 @@
         }
         .btn {
             display: inline-block;
-            padding: 10px 20px;
+            padding: 12px 20px;
             font-size: 1rem;
             color: #fff;
             background-color: #007bff;
@@ -45,6 +45,7 @@
             width: 100%;
             box-sizing: border-box;
             margin-bottom: 10px;
+            font-weight: bold;
         }
         .btn:hover { background-color: #0056b3; }
         .btn-secondary { background-color: #6c757d; }
@@ -72,8 +73,8 @@
         }
         .modal-content h2 { margin-top: 0; font-size: 1.2rem; }
         .form-group { margin-bottom: 15px; }
-        .form-group label { display: block; margin-bottom: 5px; font-weight: bold; }
-        .form-group input { width: 100%; padding: 8px; box-sizing: border-box; border: 1px solid #ccc; border-radius: 4px; }
+        .form-group label { display: block; margin-bottom: 5px; font-weight: bold; font-size: 0.9rem; }
+        .form-group input { width: 100%; padding: 10px; box-sizing: border-box; border: 1px solid #ccc; border-radius: 4px; font-size: 1rem; }
         
         #result-box {
             display: none;
@@ -84,6 +85,9 @@
             margin-top: 20px;
             border: 1px solid #c3e6cb;
         }
+        #controls-tracking {
+            display: none; /* 監視開始前は非表示 */
+        }
     </style>
 </head>
 <body>
@@ -92,13 +96,19 @@
     <h1>📍 GPSチェックイン</h1>
     
     <div class="info-box">
-        <strong>現在のステータス:</strong> <span id="status-text">位置情報を取得中...</span><br>
-        <strong>現在地:</strong> <span id="current-coords">取得中...</span><br>
-        <strong>ターゲットとの距離:</strong> <span id="current-distance">計算中...</span>
+        <strong>現在のステータス:</strong> <span id="status-text" style="color: #d9534f; font-weight: bold;">監視待機中（設定が必要です）</span><br>
+        <strong>現在地:</strong> <span id="current-coords">-</span><br>
+        <strong>ターゲットとの距離:</strong> <span id="current-distance">-</span>
     </div>
 
-    <button class="btn btn-secondary" onclick="openSettings()">設定を開く</button>
-    <button class="btn btn-secondary" onclick="resetCheckIn()" style="margin-top: 10px;">チェックイン状態をリセット</button>
+    <!-- 監視開始前のアクション -->
+    <button id="btn-initial-setup" class="btn" onclick="openSettings()">ターゲットを設定して監視開始</button>
+
+    <!-- 監視開始後のアクション -->
+    <div id="controls-tracking">
+        <button class="btn btn-secondary" onclick="openSettings()">ターゲット設定を変更</button>
+        <button class="btn btn-secondary" onclick="resetCheckIn()" style="margin-top: 10px;">チェックイン状態をリセット</button>
+    </div>
 
     <!-- チェックイン完了後の表示領域 -->
     <div id="result-box">
@@ -114,6 +124,8 @@
 <div id="settings-modal" class="modal-overlay">
     <div class="modal-content">
         <h2>ターゲット範囲の設定</h2>
+        <p style="font-size: 0.85rem; color: #666; margin-top: 0;">監視対象となる場所の座標と判定範囲を入力してください。</p>
+        
         <div class="form-group">
             <label for="input-lat">ターゲット緯度 (Latitude)</label>
             <input type="number" id="input-lat" step="0.000001" placeholder="例: 35.658034">
@@ -126,7 +138,7 @@
             <label for="input-radius">対象範囲の閾値 (メートル)</label>
             <input type="number" id="input-radius" placeholder="例: 50">
         </div>
-        <button class="btn" onclick="saveSettings()">保存して閉じる</button>
+        <button class="btn btn-success" onclick="saveAndStart()">保存して監視を開始する</button>
         <button class="btn btn-secondary" onclick="closeSettings()">キャンセル</button>
     </div>
 </div>
@@ -143,12 +155,7 @@
 
 <script>
     // --- 初期設定・変数 ---
-    let targetConfig = {
-        lat: 35.658034,
-        lon: 139.701636,
-        radius: 50 // メートル
-    };
-    
+    let targetConfig = null;
     let currentPos = { lat: null, lon: null };
     let watchId = null;
     let hasCheckedIn = false;
@@ -161,24 +168,77 @@
     const settingsModal = document.getElementById('settings-modal');
     const checkinModal = document.getElementById('checkin-modal');
     const resultBox = document.getElementById('result-box');
+    const btnInitialSetup = document.getElementById('btn-initial-setup');
+    const controlsTracking = document.getElementById('controls-tracking');
 
     // --- 初期化処理 ---
     window.onload = () => {
+        // ローカルストレージに過去の設定があれば読み込んでおく（監視はまだ開始しない）
         const savedConfig = localStorage.getItem('gpsCheckinConfig');
         if (savedConfig) {
             targetConfig = JSON.parse(savedConfig);
         }
-        startTracking();
+        // 以前はここで startTracking() を呼んでいましたが、削除しました。
     };
+
+    // --- 設定モーダル処理 ---
+    function openSettings() {
+        // 設定済みの値があれば入力欄に反映、なければ仮のデフォルト値（渋谷駅）をセット
+        if (targetConfig) {
+            document.getElementById('input-lat').value = targetConfig.lat;
+            document.getElementById('input-lon').value = targetConfig.lon;
+            document.getElementById('input-radius').value = targetConfig.radius;
+        } else {
+            document.getElementById('input-lat').value = '35.658034';
+            document.getElementById('input-lon').value = '139.701636';
+            document.getElementById('input-radius').value = '50';
+        }
+        settingsModal.style.display = 'flex';
+    }
+
+    function closeSettings() {
+        settingsModal.style.display = 'none';
+    }
+
+    function saveAndStart() {
+        const newLat = parseFloat(document.getElementById('input-lat').value);
+        const newLon = parseFloat(document.getElementById('input-lon').value);
+        const newRadius = parseFloat(document.getElementById('input-radius').value);
+
+        if (isNaN(newLat) || isNaN(newLon) || isNaN(newRadius)) {
+            alert("正しい数値を入力してください。");
+            return;
+        }
+
+        // 設定の保存
+        targetConfig = { lat: newLat, lon: newLon, radius: newRadius };
+        localStorage.setItem('gpsCheckinConfig', JSON.stringify(targetConfig));
+        
+        closeSettings();
+
+        // 監視がまだ開始されていなければ開始する
+        if (!watchId) {
+            startTracking();
+        } else {
+            // 既に監視中の場合は、新しい設定で即座に距離を再計算
+            checkDistance();
+        }
+
+        // UIの切り替え
+        btnInitialSetup.style.display = 'none';
+        controlsTracking.style.display = 'block';
+    }
 
     // --- GPSトラッキング ---
     function startTracking() {
         if (!navigator.geolocation) {
             statusText.innerText = "お使いのブラウザはGPSをサポートしていません。";
+            statusText.style.color = "#d9534f";
             return;
         }
 
         statusText.innerText = "位置情報を監視中...";
+        statusText.style.color = "#007bff";
         
         watchId = navigator.geolocation.watchPosition(
             (position) => {
@@ -191,6 +251,7 @@
             },
             (error) => {
                 statusText.innerText = `エラー: ${error.message}`;
+                statusText.style.color = "#d9534f";
             },
             {
                 enableHighAccuracy: true,
@@ -202,7 +263,7 @@
 
     // --- 距離の計算と判定 ---
     function checkDistance() {
-        if (currentPos.lat === null || targetConfig.lat === null) return;
+        if (currentPos.lat === null || targetConfig === null) return;
 
         const distance = calculateDistance(
             currentPos.lat, currentPos.lon, 
@@ -211,11 +272,13 @@
 
         currentDistance.innerText = `${Math.round(distance)} メートル`;
 
+        // 設定された半径以内に入ったか判定
         if (distance <= targetConfig.radius) {
             if (!hasCheckedIn && !isCheckInModalOpen) {
                 openCheckInModal();
             }
         } else {
+            // 範囲外に出た場合はモーダルを閉じる
             if (isCheckInModalOpen) {
                 closeCheckInModal();
             }
@@ -253,6 +316,7 @@
         hasCheckedIn = true;
         closeCheckInModal();
         
+        // チェックイン結果の表示
         document.getElementById('result-lat').innerText = currentPos.lat.toFixed(6);
         document.getElementById('result-lon').innerText = currentPos.lon.toFixed(6);
         
@@ -260,45 +324,17 @@
         document.getElementById('result-time').innerText = now.toLocaleString('ja-JP');
         
         resultBox.style.display = 'block';
-        statusText.innerText = "チェックイン済み";
+        statusText.innerText = "✅ チェックイン済み";
+        statusText.style.color = "#28a745";
     }
 
     function resetCheckIn() {
         hasCheckedIn = false;
         resultBox.style.display = 'none';
         statusText.innerText = "位置情報を監視中...";
+        statusText.style.color = "#007bff";
         alert("チェックイン状態をリセットしました。再度範囲内に入るとモーダルが表示されます。");
-        checkDistance();
-    }
-
-    // --- 設定モーダル処理 ---
-    function openSettings() {
-        document.getElementById('input-lat').value = targetConfig.lat;
-        document.getElementById('input-lon').value = targetConfig.lon;
-        document.getElementById('input-radius').value = targetConfig.radius;
-        settingsModal.style.display = 'flex';
-    }
-
-    function closeSettings() {
-        settingsModal.style.display = 'none';
-    }
-
-    function saveSettings() {
-        const newLat = parseFloat(document.getElementById('input-lat').value);
-        const newLon = parseFloat(document.getElementById('input-lon').value);
-        const newRadius = parseFloat(document.getElementById('input-radius').value);
-
-        if (isNaN(newLat) || isNaN(newLon) || isNaN(newRadius)) {
-            alert("正しい数値を入力してください。");
-            return;
-        }
-
-        targetConfig = { lat: newLat, lon: newLon, radius: newRadius };
-        localStorage.setItem('gpsCheckinConfig', JSON.stringify(targetConfig));
-        
-        alert("設定を保存しました。");
-        closeSettings();
-        checkDistance();
+        checkDistance(); // 即時再判定
     }
 </script>
 
