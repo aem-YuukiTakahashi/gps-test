@@ -1,0 +1,306 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="robots" content="noindex, nofollow">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>GPSチェックインアプリ</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+            margin: 0;
+            padding: 20px;
+            background-color: #f5f6fa;
+            color: #333;
+        }
+        h1 {
+            font-size: 1.5rem;
+            text-align: center;
+        }
+        .container {
+            max-width: 500px;
+            margin: 0 auto;
+            background: #fff;
+            padding: 20px;
+            border-radius: 10px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+        }
+        .info-box {
+            background: #e9ecef;
+            padding: 15px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+            font-size: 0.9rem;
+        }
+        .btn {
+            display: inline-block;
+            padding: 10px 20px;
+            font-size: 1rem;
+            color: #fff;
+            background-color: #007bff;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            text-align: center;
+            width: 100%;
+            box-sizing: border-box;
+            margin-bottom: 10px;
+        }
+        .btn:hover { background-color: #0056b3; }
+        .btn-secondary { background-color: #6c757d; }
+        .btn-secondary:hover { background-color: #5a6268; }
+        .btn-success { background-color: #28a745; }
+        .btn-success:hover { background-color: #218838; }
+
+        /* モーダルのスタイル */
+        .modal-overlay {
+            display: none;
+            position: fixed;
+            top: 0; left: 0; width: 100%; height: 100%;
+            background: rgba(0, 0, 0, 0.6);
+            justify-content: center;
+            align-items: center;
+            z-index: 1000;
+        }
+        .modal-content {
+            background: #fff;
+            padding: 20px;
+            border-radius: 10px;
+            width: 90%;
+            max-width: 400px;
+            box-shadow: 0 5px 15px rgba(0,0,0,0.3);
+        }
+        .modal-content h2 { margin-top: 0; font-size: 1.2rem; }
+        .form-group { margin-bottom: 15px; }
+        .form-group label { display: block; margin-bottom: 5px; font-weight: bold; }
+        .form-group input { width: 100%; padding: 8px; box-sizing: border-box; border: 1px solid #ccc; border-radius: 4px; }
+        
+        #result-box {
+            display: none;
+            background: #d4edda;
+            color: #155724;
+            padding: 15px;
+            border-radius: 8px;
+            margin-top: 20px;
+            border: 1px solid #c3e6cb;
+        }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <h1>📍 GPSチェックイン</h1>
+    
+    <div class="info-box">
+        <strong>現在のステータス:</strong> <span id="status-text">位置情報を取得中...</span><br>
+        <strong>現在地:</strong> <span id="current-coords">取得中...</span><br>
+        <strong>ターゲットとの距離:</strong> <span id="current-distance">計算中...</span>
+    </div>
+
+    <button class="btn btn-secondary" onclick="openSettings()">設定を開く</button>
+    <button class="btn btn-secondary" onclick="resetCheckIn()" style="margin-top: 10px;">チェックイン状態をリセット</button>
+
+    <!-- チェックイン完了後の表示領域 -->
+    <div id="result-box">
+        <h2 style="margin-top: 0;">🎉 チェックイン完了！</h2>
+        <p>以下の位置情報でチェックインしました。</p>
+        <strong>緯度:</strong> <span id="result-lat"></span><br>
+        <strong>経度:</strong> <span id="result-lon"></span><br>
+        <strong>時刻:</strong> <span id="result-time"></span>
+    </div>
+</div>
+
+<!-- 設定用モーダル -->
+<div id="settings-modal" class="modal-overlay">
+    <div class="modal-content">
+        <h2>ターゲット範囲の設定</h2>
+        <div class="form-group">
+            <label for="input-lat">ターゲット緯度 (Latitude)</label>
+            <input type="number" id="input-lat" step="0.000001" placeholder="例: 35.658034">
+        </div>
+        <div class="form-group">
+            <label for="input-lon">ターゲット経度 (Longitude)</label>
+            <input type="number" id="input-lon" step="0.000001" placeholder="例: 139.701636">
+        </div>
+        <div class="form-group">
+            <label for="input-radius">対象範囲の閾値 (メートル)</label>
+            <input type="number" id="input-radius" placeholder="例: 50">
+        </div>
+        <button class="btn" onclick="saveSettings()">保存して閉じる</button>
+        <button class="btn btn-secondary" onclick="closeSettings()">キャンセル</button>
+    </div>
+</div>
+
+<!-- チェックイン用モーダル -->
+<div id="checkin-modal" class="modal-overlay">
+    <div class="modal-content" style="text-align: center;">
+        <h2>📍 ターゲット範囲内です！</h2>
+        <p>設定された範囲内に入りました。<br>チェックインしてください。</p>
+        <button class="btn btn-success" onclick="doCheckIn()">チェックインする</button>
+        <button class="btn btn-secondary" onclick="closeCheckInModal()">今はしない</button>
+    </div>
+</div>
+
+<script>
+    // --- 初期設定・変数 ---
+    let targetConfig = {
+        lat: 35.658034,
+        lon: 139.701636,
+        radius: 50 // メートル
+    };
+    
+    let currentPos = { lat: null, lon: null };
+    let watchId = null;
+    let hasCheckedIn = false;
+    let isCheckInModalOpen = false;
+
+    // --- DOM要素の取得 ---
+    const statusText = document.getElementById('status-text');
+    const currentCoords = document.getElementById('current-coords');
+    const currentDistance = document.getElementById('current-distance');
+    const settingsModal = document.getElementById('settings-modal');
+    const checkinModal = document.getElementById('checkin-modal');
+    const resultBox = document.getElementById('result-box');
+
+    // --- 初期化処理 ---
+    window.onload = () => {
+        const savedConfig = localStorage.getItem('gpsCheckinConfig');
+        if (savedConfig) {
+            targetConfig = JSON.parse(savedConfig);
+        }
+        startTracking();
+    };
+
+    // --- GPSトラッキング ---
+    function startTracking() {
+        if (!navigator.geolocation) {
+            statusText.innerText = "お使いのブラウザはGPSをサポートしていません。";
+            return;
+        }
+
+        statusText.innerText = "位置情報を監視中...";
+        
+        watchId = navigator.geolocation.watchPosition(
+            (position) => {
+                currentPos.lat = position.coords.latitude;
+                currentPos.lon = position.coords.longitude;
+                
+                currentCoords.innerText = `${currentPos.lat.toFixed(6)}, ${currentPos.lon.toFixed(6)}`;
+                
+                checkDistance();
+            },
+            (error) => {
+                statusText.innerText = `エラー: ${error.message}`;
+            },
+            {
+                enableHighAccuracy: true,
+                maximumAge: 0,
+                timeout: 5000
+            }
+        );
+    }
+
+    // --- 距離の計算と判定 ---
+    function checkDistance() {
+        if (currentPos.lat === null || targetConfig.lat === null) return;
+
+        const distance = calculateDistance(
+            currentPos.lat, currentPos.lon, 
+            targetConfig.lat, targetConfig.lon
+        );
+
+        currentDistance.innerText = `${Math.round(distance)} メートル`;
+
+        if (distance <= targetConfig.radius) {
+            if (!hasCheckedIn && !isCheckInModalOpen) {
+                openCheckInModal();
+            }
+        } else {
+            if (isCheckInModalOpen) {
+                closeCheckInModal();
+            }
+        }
+    }
+
+    // --- 2点間の距離を計算する関数 (Haversine) ---
+    function calculateDistance(lat1, lon1, lat2, lon2) {
+        const R = 6371e3;
+        const radLat1 = lat1 * Math.PI / 180;
+        const radLat2 = lat2 * Math.PI / 180;
+        const deltaLat = (lat2 - lat1) * Math.PI / 180;
+        const deltaLon = (lon2 - lon1) * Math.PI / 180;
+
+        const a = Math.sin(deltaLat/2) * Math.sin(deltaLat/2) +
+                  Math.cos(radLat1) * Math.cos(radLat2) *
+                  Math.sin(deltaLon/2) * Math.sin(deltaLon/2);
+        const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+
+        return R * c;
+    }
+
+    // --- チェックイン処理 ---
+    function openCheckInModal() {
+        isCheckInModalOpen = true;
+        checkinModal.style.display = 'flex';
+    }
+
+    function closeCheckInModal() {
+        isCheckInModalOpen = false;
+        checkinModal.style.display = 'none';
+    }
+
+    function doCheckIn() {
+        hasCheckedIn = true;
+        closeCheckInModal();
+        
+        document.getElementById('result-lat').innerText = currentPos.lat.toFixed(6);
+        document.getElementById('result-lon').innerText = currentPos.lon.toFixed(6);
+        
+        const now = new Date();
+        document.getElementById('result-time').innerText = now.toLocaleString('ja-JP');
+        
+        resultBox.style.display = 'block';
+        statusText.innerText = "チェックイン済み";
+    }
+
+    function resetCheckIn() {
+        hasCheckedIn = false;
+        resultBox.style.display = 'none';
+        statusText.innerText = "位置情報を監視中...";
+        alert("チェックイン状態をリセットしました。再度範囲内に入るとモーダルが表示されます。");
+        checkDistance();
+    }
+
+    // --- 設定モーダル処理 ---
+    function openSettings() {
+        document.getElementById('input-lat').value = targetConfig.lat;
+        document.getElementById('input-lon').value = targetConfig.lon;
+        document.getElementById('input-radius').value = targetConfig.radius;
+        settingsModal.style.display = 'flex';
+    }
+
+    function closeSettings() {
+        settingsModal.style.display = 'none';
+    }
+
+    function saveSettings() {
+        const newLat = parseFloat(document.getElementById('input-lat').value);
+        const newLon = parseFloat(document.getElementById('input-lon').value);
+        const newRadius = parseFloat(document.getElementById('input-radius').value);
+
+        if (isNaN(newLat) || isNaN(newLon) || isNaN(newRadius)) {
+            alert("正しい数値を入力してください。");
+            return;
+        }
+
+        targetConfig = { lat: newLat, lon: newLon, radius: newRadius };
+        localStorage.setItem('gpsCheckinConfig', JSON.stringify(targetConfig));
+        
+        alert("設定を保存しました。");
+        closeSettings();
+        checkDistance();
+    }
+</script>
+
+</body>
+</html>
